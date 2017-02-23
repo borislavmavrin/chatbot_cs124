@@ -24,6 +24,7 @@ class Chatbot:
       self.name = 'moviebot'
       self.is_turbo = is_turbo
       self.read_data()
+      self.matching_movie_titles = ".*\"([^\"]+)\".*"
 
     #############################################################################
     # 1. WARM UP REPL
@@ -76,9 +77,18 @@ class Chatbot:
       if self.is_turbo == True:
         response = 'processed %s in creative mode!!' % input
       else:
-        response = 'processed %s in starter mode' % input
+        response = starter_mode_response(input)
 
       return response
+    
+    def starter_mode_response(self, input):
+      matches = re.findall(self.matching_movie_titles, input)
+      if len(matches) == 0:
+        return 'Sorry I did not understand that. Please Enter your movie preferences'
+      else:
+        movie_titles = ""
+        for m in matches:
+          movie_titles = movie_titles + m[0]
 
 
     #############################################################################
