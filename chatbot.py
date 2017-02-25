@@ -30,6 +30,8 @@ class Chatbot:
       self.max_minimum_number_of_recommendations_needed_by_the_chatbot = 10
       self.movies_to_recommend = []
       self.index_in_movies_to_recommend = 0
+      self.negation_pattern = "neither|nor|never|no|nothing|nowhere|noone|none|not|havent|hasnt|hadnt|cant|couldnt|shouldnt|wont|wouldnt|dont|doesnt|didnt|isnt|arent|aint|[a-z]+n't"
+      self.stopList = set(self.readFile('data/english.stop'))
 
     #############################################################################
     # 1. WARM UP REPL
@@ -68,14 +70,58 @@ class Chatbot:
     # 2. Modules 2 and 3: extraction and transformation                         #
     #############################################################################
 
+    def filterStopWords(self, words):
+      """Filters stop words."""
+      filtered = []
+      for word in words:
+        if not word in self.stopList and word.strip() != '':
+          filtered.append(word)
+      return filtered
+
+    def negate_words(self, words):
+      return words
+
+    def calculate_negative_sentiment_from_lexicon(self, words):
+      return 0.0
+
+    def calculate_positive_sentiment_from_lexicon(self, words):
+      return 0.0
+
+
     def extract_movie_sentiment(input):
-      return "pos"
+      words_for_weights = []
+      sentence_fragments = input.split("\"")
+      sentence_fragments_excluding_those_enclosed_by_quotations = []
+      num_sentence_fragments = len(sentence_fragments)
+      for index in xrange(0, num_sentence_fragments):
+        if index % 2 == 0:
+          sentence_fragments_excluding_those_enclosed_by_quotations.append(sentence_fragments[index])
+      for fragment in sentence_fragments_excluding_those_enclosed_by_quotations:
+        possible_words = fragment.split(" ")
+        for word in possible_words:
+          if len(word) > 1:
+            words_for_weights.append(word)
+
+      words_for_weights = self.negate_words(words_for_weights)
+      words_for_weights = self.filterStopWords(words_for_weights)
+      negative_sentiment = self.calculate_negative_sentiment_from_lexicon(words_for_weights)
+      positive_sentiment = self.calculate_positive_sentiment_from_lexicon(words_for_weights)
+      if negative_sentiment > positive_sentiment:
+        return "neg"
+      else:
+        return "pos"
+
 
     def extract_response(input):
       return "no"
 
 
     def starter_mode_response(self, input):
+      number_of_quotes = 0  
+      for c in input:
+        if c == "\"":
+          number_of_quotes = number_of_quotes + 1
+
       matches = re.findall(self.pattern_for_movie_titles, input)
       if len(matches) == 0:
         if self.asked_for_another_recommendation or self.asked_to_continue:
@@ -102,26 +148,28 @@ class Chatbot:
       elif: len(matches) > 1:
         return "Tell me only one movie at a time please and thank you!!!"
       else:
-        self.movie_titles_that_the_user_has_provided.append(matches)
-        num_movies_user_has_provided = len(self.movie_titles_that_the_user_has_provided)
-        response = ""
-        sentiment = self.extract_movie_sentiment(input)
-        if sentiment == "neg":
-          response = response + "You did not like \"" + matches[0] + "\""
-        else:
-          response = response + "You liked \"" + matches[0] + "\""
-
-        if num_movies_user_has_provided < self.minimum_number_of_recommendations_needed_by_the_chatbot:
-          response = response + "Please tell me more! You intrigue me with your movie taste."
-        else:
-          response = response + "I have enough information to tell you a movie recommendation"
-          find_movies_to_recommend()
-          if len(self.movies_to_recommend) > 0:
-            movie_to_recommend = self.movies_to_recommend[self.index_in_movies_to_recommend]
-            response = response + "I recommend the following movie: \"" +  movie_to_recommend + "\""
+        if number_of_quotes % 2 == 0:
+          self.movie_titles_that_the_user_has_provided.append(matches)
+          num_movies_user_has_provided = len(self.movie_titles_that_the_user_has_provided)
+          response = ""
+          sentiment = self.extract_movie_sentiment(input)
+          if sentiment == "neg":
+            response = response + "You told me you did not like \"" + matches[0] + "\". Is that correct?" 
           else:
-            response = response + "Sorry I could not find any good recommendations. Tell me one more movie that you have seen!"
+            response = response + "You told me you liked \"" + matches[0] + "\". Is that correct?"
 
+          if num_movies_user_has_provided < self.minimum_number_of_recommendations_needed_by_the_chatbot:
+            response = response + "Please tell me more! You intrigue me with your movie taste."
+          else:
+            response = response + "I have enough information to tell you a movie recommendation"
+            find_movies_to_recommend()
+            if len(self.movies_to_recommend) > 0:
+              movie_to_recommend = self.movies_to_recommend[self.index_in_movies_to_recommend]
+              response = response + "I recommend the following movie: \"" +  movie_to_recommend + "\""
+            else:
+              response = response + "Sorry I could not find any good recommendations. Tell me one more movie that you have seen!"
+        else:
+          return "I recommend checking you quotations. You seemed to have to a beginning or closing equation"   
 
     def process(self, input):
       """Takes the input string from the REPL and call delegated functions
