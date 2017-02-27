@@ -24,7 +24,8 @@ class REPL(cmd.Cmd):
     is_turbo = False
     chatbot = Chatbot(is_turbo)
     name = chatbot.bot_name()
-    bot_prompt = '\001\033[96m\002%s> \001\033[0m\002' % name
+    #bot_prompt = '\001\033[96m\002%s> \001\033[0m\002' % name
+    bot_prompt = name + '> '
     prompt = '> '
     greeting = chatbot.greeting()
     intro = chatbot.intro() + '\n' + bot_prompt + greeting

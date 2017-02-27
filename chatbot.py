@@ -10,6 +10,7 @@ import csv
 import math
 import re
 import numpy as np
+from PorterStemmer import *
 
 from movielens import ratings
 from random import randint
@@ -32,6 +33,17 @@ class Chatbot:
       self.index_in_movies_to_recommend = 0
       self.negation_pattern = "neither|nor|never|no|nothing|nowhere|noone|none|not|havent|hasnt|hadnt|cant|couldnt|shouldnt|wont|wouldnt|dont|doesnt|didnt|isnt|arent|aint|[a-z]+n't"
       self.stopList = set(self.readFile('data/english.stop'))
+      self.porter_stemmer = PorterStemmer()
+      self.end_of_a_clause_pattern = "[\.:;!,?]"
+      self.asked_for_another_recommendation = False 
+      self.asked_to_continue = False
+      self.possible_quotes_for_telling_how_to_quit_the_application = ["Sorry to hear that. Please enter \":quit\" to exit the application. Have a great day!",
+                                                                      "All good things have to come to an end. You can exit the application by hitting \":quit\". Thank you for your time!",
+                                                                      "Please enter \":quit\" to exit the application. Thank you!"]
+      self.possible_quotes_for_telling_how_to_express_positive_sentiment_just_using_like = [("Wow! I like", "too!"), ("Awesome, I thought that", "was also a pretty good movie."), ("Yup, I remember watching", ". I had a great time!")]
+      self.possible_quotes_for_telling_how_to_express_negative_sentiment_just_using_like = [("I agree that", "was not pretty good"), ("Finally I found someone that agrees with me about"), (". I did not have good time watching it.")]
+      self.indices_of_movie_titles_submitted_by_user = []
+      self.map_from_indices_of_movie_titles_submitted_by_user_to_binarized_rating_score = {}
 
     #############################################################################
     # 1. WARM UP REPL
@@ -70,6 +82,27 @@ class Chatbot:
     # 2. Modules 2 and 3: extraction and transformation                         #
     #############################################################################
 
+    def readFile(self, fileName):
+      """
+      * Code for reading a file.  you probably don't want to modify anything here, 
+      * unless you don't like the way we segment files.
+      """
+      contents = []
+      f = open(fileName)
+
+      for line in f:
+        contents.append(line)
+      f.close()
+      result = self.segmentWords('\n'.join(contents)) 
+      return result
+
+    
+    def segmentWords(self, s):
+      """
+      * Splits lines on whitespace for file reading
+      """
+      return s.split()
+
     def filterStopWords(self, words):
       """Filters stop words."""
       filtered = []
@@ -79,16 +112,68 @@ class Chatbot:
       return filtered
 
     def negate_words(self, words):
-      return words
+      we_have_seen_negative_word = False
+      filtered_words = []
+      for word in words:
+        if(re.search(self.negation_pattern, word) != None):
+          we_have_seen_negative_word = True
+          filtered_words.append(word)
+        elif(re.search(self.end_of_a_clause_pattern, word) != None):
+          we_have_seen_negative_word = False
+          filtered_words.append(word)
+        elif(we_have_seen_negative_word):
+          filtered_words.append("NEG_" + word)
+        else:
+          filtered_words.append(word)
 
-    def calculate_negative_sentiment_from_lexicon(self, words):
-      return 0.0
+      return filtered_words
 
-    def calculate_positive_sentiment_from_lexicon(self, words):
-      return 0.0
+    def extract_not(self, word):
+      pattern = "NEG_(.+)"
+      match_result = re.search(pattern, word)
+      if match_result != None:
+        return (match_result.group(1), True)
+      else:
+        return (word, False)
+
+    def extract_out_punction(self, word):
+      pattern  = "[\.:;!,?]*?([^\.:;!,?]+)[[\.:;!,?]*?"
+      match_result = re.search(pattern, word)
+      if match_result != None:
+        return match_result.group(1)
+      else:
+        return word
+
+    def calculate_sentiment_from_lexicon(self, words, type_of_sentiment):
+      sentiment_value = 0.0
+      for index, word in zip(range(0, len(words)), words):
+        processed_word, opposite = self.extract_not(word)
+        processed_word = self.extract_out_punction(processed_word)
+        processed_word_stemmed = self.porter_stemmer.stem(processed_word, 0, len(processed_word) - 1)
+
+        if processed_word_stemmed in self.sentiment.keys():
+          isSentiment = (self.sentiment[processed_word_stemmed] == type_of_sentiment and not opposite) or (self.sentiment[processed_word_stemmed] != type_of_sentiment and opposite)
+          if isSentiment:
+            if index < (float(len(words)) / float(3)):
+              sentiment_value = sentiment_value + 1
+            elif index >= (float(len(words)) / float(3)) and index < ((2*float(len(words))) / float(3)):
+              sentiment_value = sentiment_value + 2
+            else:
+              sentiment_value = sentiment_value + 4
+        else:
+          if processed_word in self.sentiment.keys():
+            isSentiment = (self.sentiment[processed_word] == type_of_sentiment and not opposite) or (self.sentiment[processed_word] != type_of_sentiment and opposite)
+            if isSentiment:
+              if index < (float(len(words)) / float(3)):
+                sentiment_value = sentiment_value + 1
+              elif index >= (float(len(words)) / float(3)) and index < ((2*float(len(words))) / float(3)):
+                sentiment_value = sentiment_value + 2
+              else:
+                sentiment_value = sentiment_value + 4
+      return sentiment_value
 
 
-    def extract_movie_sentiment(input):
+    def extract_movie_sentiment(self, input):
       words_for_weights = []
       sentence_fragments = input.split("\"")
       sentence_fragments_excluding_those_enclosed_by_quotations = []
@@ -103,73 +188,156 @@ class Chatbot:
             words_for_weights.append(word)
 
       words_for_weights = self.negate_words(words_for_weights)
-      words_for_weights = self.filterStopWords(words_for_weights)
-      negative_sentiment = self.calculate_negative_sentiment_from_lexicon(words_for_weights)
-      positive_sentiment = self.calculate_positive_sentiment_from_lexicon(words_for_weights)
-      if negative_sentiment > positive_sentiment:
+      negative_sentiment = self.calculate_sentiment_from_lexicon(words_for_weights, "neg")
+      positive_sentiment = self.calculate_sentiment_from_lexicon(words_for_weights, "pos")
+
+      if abs(float(negative_sentiment) - float(positive_sentiment)) <= 0.00001:
+        return "neutral"
+      elif negative_sentiment > positive_sentiment:
         return "neg"
       else:
         return "pos"
 
 
-    def extract_response(input):
-      return "no"
+    def extract_response_to_an_yes_or_no_question(self, input):
+      pattern_for_no = ".*?(?:\\b[nN][oO]\\b|\\b[nN]\\b)(?:thank you|thanks)?.*?"
+      pattern_for_yes = ".*?(?:\\b[yY]\\b|\\b[yY][eE][sS]\\b|\\b[yY][eE][aA][hH]\\b|\\b[yY][uU][pP])\\b.*?(?:\\b[pP][lL][eE][aA][sS][eE]\\b)?.*?(?:\\b[tT][hH][aA][nN][kK] [yY][oO][uU]\\b)?.*?"
+      match_result_for_no = re.search(pattern_for_no, input)
+      match_result_for_yes = re.search(pattern_for_yes, input)
+      if match_result_for_no != None:
+        return "no"
+      elif match_result_for_yes != None:
+        return "yes"
+      else:
+        return "neither"
+
+    def movie_exists(self, user_movie_title):
+      pattern_for_english_articles = "(An|A|The)\s(.+)"
+      match_result = re.search(pattern_for_english_articles, user_movie_title)
+      found_the_movie_in_movie_database = False
+      index_of_movie_title_submitted_by_user = -1
+      
+      if match_result != None:
+        movie_title_without_english_article = match_result.group(2)
+        english_article = match_result.group(1)
+        pattern = user_movie_title + "\s\(\d\d\d\d\).*?|" + movie_title_without_english_article + ",\s" + english_article + "\s\(\d\d\d\d\).*?"
+        for index_movie_title in xrange(0, len(self.titles)):
+          movie_title = self.titles[index_movie_title]
+          match_result_for_movie_title = re.search(pattern, movie_title[0])
+          if match_result_for_movie_title != None:
+            index_of_movie_title_submitted_by_user = index_movie_title
+            found_the_movie_in_movie_database = True
+            break
+      else:
+        pattern_str = user_movie_title + "\s\(\d\d\d\d\).*?|" + "A\s" + user_movie_title + "\s\(\d\d\d\d\).*?|" + user_movie_title + ",\sA\s\(\d\d\d\d\).*?|" + "An\s" + user_movie_title + "\s\(\d\d\d\d\).*?|" + user_movie_title + ",\sAn\s\(\d\d\d\d\).*?|" + "The\s" + user_movie_title + "\s\(\d\d\d\d\).*?|" + user_movie_title + ",\sThe\s\(\d\d\d\d\).*?"
+        pattern = re.compile(pattern_str)
+        for index_movie_title in xrange(0, len(self.titles)):
+          movie_title = self.titles[index_movie_title]
+          match_result_for_movie_title = re.search(pattern_str, movie_title[0])
+          if match_result_for_movie_title != None:
+            index_of_movie_title_submitted_by_user = index_movie_title
+            found_the_movie_in_movie_database = True
+            break
+      
+      return (found_the_movie_in_movie_database, index_of_movie_title_submitted_by_user)
+
+    def find_movies_to_recommend(self):
+      self.binarize()
+      self.recommend()
 
 
     def starter_mode_response(self, input):
+      ##
+      # Count the number of quotes in order to inform
+      # the user if they are missing a closing or opening quote.
+      ##
       number_of_quotes = 0  
       for c in input:
         if c == "\"":
           number_of_quotes = number_of_quotes + 1
 
+      ##
+      # Find all the pair of quotations that exist in the user's
+      # input. 
+      ##
       matches = re.findall(self.pattern_for_movie_titles, input)
       if len(matches) == 0:
         if self.asked_for_another_recommendation or self.asked_to_continue:
-          answer = self.extract_response(input)
-          if answer == "no":
-            self.quit_flag = True
-            return "Goodbye!"
+          answer = self.extract_response_to_an_yes_or_no_question(input)
+          if answer == "no" and not self.asked_to_continue:
+            self.asked_for_another_recommendation = False
+            self.asked_to_continue = True
+            self.map_from_indices_of_movie_titles_submitted_by_user_to_binarized_rating_score = {}
+            self.movies_to_recommend = []
+            self.index_in_movies_to_recommend = 0
+            return "Would you like to continue providing more movies that you have seen?"
+          elif answer == "no" and self.asked_to_continue:
+            return "Please enter \":quit\" to exit the application. Thank you!"
+          elif answer == "neither":
+            return "Very sorry about this. But I did not understand what you just said. Can you give me a \"yes\"/\"no\" answer? Thank you!"
           else:
             if self.asked_for_another_recommendation:
               if len(self.movies_to_recommend) < 0 or self.index_in_movies_to_recommend >= len(self.movies_to_recommend):
                 self.asked_for_another_recommendation = False
                 self.asked_to_continue = True
-                return "Sorry I cannot recommend you another movie. I have provided all the recommendations I have found. Would you like to continue talking with me?"
+                return " Sorry I cannot recommend you another movie. I have provided all the recommendations I have found. Would you like to continue talking with me? Please enter \"yes\" or \"no\". Thanks!"
               else:
-                response = "I further recommend" + self.movies_to_recommend[self.index_in_movies_to_recommend] + "."
-                response = response + "Would you like to me to recommend another movie?"
+                self.asked_for_another_recommendation = True
+                self.asked_to_continue = False
+                response = "I further recommend " + self.movies_to_recommend[self.index_in_movies_to_recommend] + "."
+                response = response + " Would you like to me to recommend another movie? Please enter \"yes\" or \"no\". Thanks!"
                 self.index_in_movies_to_recommend = self.index_in_movies_to_recommend + 1
                 return response
             else:
               self.asked_to_continue = False
-              return "Tell me a movie that you love or hate"
+              return "Tell me a movie that you love or hate."
         else:
           return "Please tell me about ONE movie that you either did not like and put that movie title in QUOTES!!!"
-      elif: len(matches) > 1:
+      elif len(matches) > 1:
         return "Tell me only one movie at a time please and thank you!!!"
       else:
         if number_of_quotes % 2 == 0:
-          self.movie_titles_that_the_user_has_provided.append(matches)
-          num_movies_user_has_provided = len(self.movie_titles_that_the_user_has_provided)
-          response = ""
-          sentiment = self.extract_movie_sentiment(input)
-          if sentiment == "neg":
-            response = response + "You told me you did not like \"" + matches[0] + "\". Is that correct?" 
-          else:
-            response = response + "You told me you liked \"" + matches[0] + "\". Is that correct?"
-
-          if num_movies_user_has_provided < self.minimum_number_of_recommendations_needed_by_the_chatbot:
-            response = response + "Please tell me more! You intrigue me with your movie taste."
-          else:
-            response = response + "I have enough information to tell you a movie recommendation"
-            find_movies_to_recommend()
-            if len(self.movies_to_recommend) > 0:
-              movie_to_recommend = self.movies_to_recommend[self.index_in_movies_to_recommend]
-              response = response + "I recommend the following movie: \"" +  movie_to_recommend + "\""
+          movie_exists_result = self.movie_exists(matches[0])
+          if movie_exists_result[0]:
+            response = ""
+            sentiment = self.extract_movie_sentiment(input)
+            if sentiment == "neutral":
+              response = response + "Can you tell me more information about \"" + matches[0] + "\"? Do you like it or hate it?"
             else:
-              response = response + "Sorry I could not find any good recommendations. Tell me one more movie that you have seen!"
+              self.movie_titles_that_the_user_has_provided.append(matches[0])
+              num_movies_user_has_provided = len(self.movie_titles_that_the_user_has_provided)
+              self.indices_of_movie_titles_submitted_by_user.append(movie_exists_result[1])
+
+              if sentiment == "neg":
+                response = response + "You told me you did not like \"" + matches[0] + "\"."
+                self.map_from_indices_of_movie_titles_submitted_by_user_to_binarized_rating_score[movie_exists_result[1]] = -1 
+              else:
+                response = response + "You told me you liked \"" + matches[0] + "\"."
+                self.map_from_indices_of_movie_titles_submitted_by_user_to_binarized_rating_score[movie_exists_result[1]] = 1
+
+              if num_movies_user_has_provided < self.minimum_number_of_recommendations_needed_by_the_chatbot:
+                response = response + "Please tell me more! You intrigue me with your movie taste."
+              else:
+                response = response + " You have given me enough information to make a prediction."
+                self.find_movies_to_recommend()
+                if len(self.movies_to_recommend) > 0:
+                  movie_to_recommend = self.movies_to_recommend[self.index_in_movies_to_recommend]
+                  self.asked_to_continue = False
+                  self.asked_for_another_recommendation = True
+                  response = response + " I recommend the following movie: \"" +  movie_to_recommend + "\"" + " Would you like to me to recommend another movie, yes or no? Thank you!"
+                  self.index_in_movies_to_recommend = self.index_in_movies_to_recommend + 1
+                else:
+                  self.asked_for_another_recommendation = False
+                  self.asked_to_continue = True
+                  response = response + " Sorry I could not find any good recommendations. Would you like to continue, yes or no?"
+            return response
+          else:
+            return "Sorry I could not recognize the movie \"" + matches[0] + "\". If the movie is part of a series, please provide the full name of the specific entry of the series. In addition, check for punctuation and/or spelling errors. Otherwise, tell me another movie that you have seen."
         else:
-          return "I recommend checking you quotations. You seemed to have to a beginning or closing equation"   
+          return "I recommend checking you quotations. You seemed to missing a beginning or closing quotation"  
+
+
+
 
     def process(self, input):
       """Takes the input string from the REPL and call delegated functions
@@ -210,9 +378,9 @@ class Chatbot:
       self.binarized_ratings = np.zeros((num_movies, num_users))
       for r in xrange(0, num_movies):
         for c in xrange(0, num_users):
-          if self.ratings.shape[r][c] > 2.5:
+          if self.ratings[r][c] > 2.5:
             self.binarized_ratings[r][c] = 1
-          else
+          else:
             self.binarized_ratings[r][c] = -1
 
 
@@ -226,9 +394,12 @@ class Chatbot:
       norm_of_v = 0
       sum_of_products_of_features = 0
       for index in xrange(0, num_features):
-        norm_of_u = norm_of_u + (u[index]**2)
-        norm_of_v = norm_of_v + (v[index]**2)
+        norm_of_u = norm_of_u + (float(u[index])**2)
+        norm_of_v = norm_of_v + (float(v[index])**2)
         sum_of_products_of_features = sum_of_products_of_features + (u[index]*v[index])
+
+      norm_of_u = math.sqrt(float(norm_of_u))
+      norm_of_v = math.sqrt(float(norm_of_v))
 
       similarity = float(sum_of_products_of_features) / (float(norm_of_u) * float(norm_of_v))
 
@@ -237,42 +408,28 @@ class Chatbot:
 
 
 
-    def recommend(self, u):
+    def recommend(self):
       """Generates a list of movies based on the input vector u using
       collaborative filtering"""
-      # TODO: Implement a recommendation function that takes a user vector u
-      # and outputs a list of movies recommended by the chatbot
       num_movies = len(self.titles)
-
-      list_of_user_movies = []
-      number_of_features = u.shape[0]
-      for index in xrange(0, number_of_features):
-        if u[index] != 0:
-          list_of_user_movies.append(index)
-
-
       movie_to_score_map = {}
 
       for movie_index in xrange(0, num_movies):
-        if not movie_index in list_of_user_movies:
-          movie_vector = np.transpose(np.matrix(self.ratings[movie_index]))
+        if not movie_index in self.indices_of_movie_titles_submitted_by_user:
+          movie_vector = self.binarized_ratings[movie_index]
           sum_of_similarities = 0
-          for user_movie_index in list_of_user_movies:
-            user_movie_vector = np.transpose(np.matrix(self.ratings[user_movie_index]))
-            sum_of_similarities = float(sum_of_similarities) + float(self.distance(movie, vector))
-          movie_to_score_map[movie_vector] = sum_of_similarities
+          for user_movie_index in self.indices_of_movie_titles_submitted_by_user:
+            user_movie_vector = self.binarized_ratings[user_movie_index]
+            sum_of_similarities = float(sum_of_similarities) + (float(self.distance(movie_vector, user_movie_vector)) * self.map_from_indices_of_movie_titles_submitted_by_user_to_binarized_rating_score[user_movie_index])
+          movie_to_score_map[movie_index] = sum_of_similarities
 
       number_of_movies = len(movie_to_score_map.keys())
 
-      movies_sorted_by_decreasing_similarity = sorted(movie_to_score_map, key = movie_to_score_map,__getitem__, reverse=True)
+      movies_sorted_by_decreasing_similarity = sorted(movie_to_score_map, key = movie_to_score_map.__getitem__, reverse=True)
 
-      list_movie_titles_to_recommend = []
       for index in xrange(0, number_of_movies):
-        list_movie_titles_to_recommend.append(self.titles[movies_sorted_by_decreasing_similarity[index]])
+        self.movies_to_recommend.append(self.titles[movies_sorted_by_decreasing_similarity[index]][0])
 
-      return list_movie_titles_to_recommend
-
-      
 
 
     #############################################################################
